@@ -49,120 +49,122 @@ async function getFontFamily(pageStart, pageEnd) {
 }
 
 async function downloadFonts(fonts_, rawDownload_) {
-    return new Promise((resolve, reject) => {
-        fontList = []
-        if (Array.isArray(fonts_)) {
-            //more than one font
-            fontList = fonts_
-        } else {
-            //only one font
-            fontList = [fonts_]
-        }
+    fontList = []
+    if (Array.isArray(fonts_)) {
+        //more than one font
+        fontList = fonts_
+    } else {
+        //only one font
+        fontList = [fonts_]
+    }
 
-        const fontBuffers = []
-        for (var i = 0; i < fontList.length; i++) {
-            getAndRepairFont(fontList[i], rawDownload_, (font, fontMeta) => {
-                fontBuffers.push(font)
-                if (fontBuffers.length == fontList.length) {
-                    resolve(fontBuffers)
-                }
-            })
-        }
-    })
+    const fontBuffers = []
+    for (var i = 0; i < fontList.length; i++) {
+        fontBuffers.push(await getAndRepairFont(fontList[i], rawDownload_))
+    }
+    return fontBuffers
 }
 
-function getAndRepairFont(font_, rawDownload_, callback_) {
+async function getAndRepairFont(font_, rawDownload_) {
     if (rawDownload_) {
-        axios
-            .get(font_.url, { responseType: "arraybuffer" })
-            .then(function (response) {
-                callback_(response.data, font_)
-            })
+        const response = await axios.get(font_.url, {
+            responseType: "arraybuffer",
+        })
+
+        return response.data
     } else {
-        opentype.load(font_.url, function (error_, fontData_) {
-            if (error_) {
-                return "Error: Font failed to load."
-            } else {
-                //Rebuild the glyph data structure. This repairs any encoding issues.
-                let rebuiltGlyphs = []
+        return new Promise((resolve, reject) => {
+            opentype.load(font_.url, function (error_, fontData_) {
+                if (error_) {
+                    reject(new Error("font failed to load"))
+                } else {
+                    //Rebuild the glyph data structure. This repairs any encoding issues.
+                    let rebuiltGlyphs = []
 
-                //for every glyph in the parsed font data:
-                for (let i = 0; i < fontData_.glyphs.length; i++) {
-                    //Create a structure to hold the new glyph data
-                    let glyphData = {}
+                    //for every glyph in the parsed font data:
+                    for (let i = 0; i < fontData_.glyphs.length; i++) {
+                        //Create a structure to hold the new glyph data
+                        let glyphData = {}
 
-                    let glyphFields = [
-                        "name",
-                        "unicode",
-                        "unicodes",
-                        "path",
-                        "index",
-                        "advanceWidth",
-                        "leftSideBearing",
+                        let glyphFields = [
+                            "name",
+                            "unicode",
+                            "unicodes",
+                            "path",
+                            "index",
+                            "advanceWidth",
+                            "leftSideBearing",
+                        ]
+
+                        glyphFields.forEach((field) => {
+                            if (fontData_.glyphs.glyphs[i][field] != null) {
+                                glyphData[field] =
+                                    fontData_.glyphs.glyphs[i][field]
+                            }
+                        })
+
+                        //HOTFIX #1     If the advanceWidth of a glyph is NaN, opentype will crash.
+                        //SOLUTION:     Ensure advanceWidth has non-NaN AND non-0 value
+                        if (
+                            glyphData.advanceWidth == null ||
+                            isNaN(glyphData.advanceWidth)
+                        ) {
+                            let newAdvanceWidth = Math.floor(
+                                fontData_.glyphs.glyphs[i].getBoundingBox().x2
+                            )
+                            if (newAdvanceWidth == 0) {
+                                newAdvanceWidth =
+                                    fontData_.glyphs.glyphs[0].getBoundingBox()
+                                        .x2
+                            }
+                            glyphData.advanceWidth = newAdvanceWidth
+                        }
+
+                        //Rebuild the new glyph.
+                        let rebuiltGlyph = new opentype.Glyph(glyphData)
+
+                        //HOTFIX #2:    If fields with a value of 0 are used in the constructor, opentype will simply not set them in the object.
+                        //SOLUTION:     Manually go through every 0 field that should have been set in the constructor, and set it. ( https://github.com/opentypejs/opentype.js/issues/375 )
+                        glyphFields.forEach((field) => {
+                            if (
+                                glyphData[field] != null &&
+                                glyphData[field] == 0
+                            ) {
+                                rebuiltGlyph[field] = 0
+                            }
+                        })
+
+                        //push the rebuilt glyph to an array.
+                        rebuiltGlyphs.push(rebuiltGlyph)
+                    }
+
+                    //create a structure of font data with fields from the parsed font.
+                    let newFontData = {
+                        familyName: font_.familyName,
+                        styleName: font_.style,
+                        glyphs: rebuiltGlyphs,
+                    }
+
+                    //extract as much available data out of the existing font data and copy it over to the new font:
+                    let optionalFontDataFields = [
+                        "defaultWidthX",
+                        "nominalWidthX",
+                        "unitsPerEm",
+                        "ascender",
+                        "descender",
                     ]
-
-                    glyphFields.forEach((field) => {
-                        if (fontData_.glyphs.glyphs[i][field] != null) {
-                            glyphData[field] = fontData_.glyphs.glyphs[i][field]
+                    optionalFontDataFields.forEach((field) => {
+                        if (fontData_[field] != null) {
+                            newFontData[field] = fontData_[field]
                         }
                     })
 
-                    //HOTFIX #1     If the advanceWidth of a glyph is NaN, opentype will crash.
-                    //SOLUTION:     Ensure advanceWidth has non-NaN AND non-0 value
-                    if (
-                        glyphData.advanceWidth == null ||
-                        isNaN(glyphData.advanceWidth)
-                    ) {
-                        let newAdvanceWidth = Math.floor(
-                            fontData_.glyphs.glyphs[i].getBoundingBox().x2
-                        )
-                        if (newAdvanceWidth == 0) {
-                            newAdvanceWidth =
-                                fontData_.glyphs.glyphs[0].getBoundingBox().x2
-                        }
-                        glyphData.advanceWidth = newAdvanceWidth
-                    }
+                    //rebuild and download the font.
+                    let newFont = new opentype.Font(newFontData)
 
-                    //Rebuild the new glyph.
-                    let rebuiltGlyph = new opentype.Glyph(glyphData)
-
-                    //HOTFIX #2:    If fields with a value of 0 are used in the constructor, opentype will simply not set them in the object.
-                    //SOLUTION:     Manually go through every 0 field that should have been set in the constructor, and set it. ( https://github.com/opentypejs/opentype.js/issues/375 )
-                    glyphFields.forEach((field) => {
-                        if (glyphData[field] != null && glyphData[field] == 0) {
-                            rebuiltGlyph[field] = 0
-                        }
-                    })
-
-                    //push the rebuilt glyph to an array.
-                    rebuiltGlyphs.push(rebuiltGlyph)
+                    resolve(newFont.ToNodeBuffer())
                 }
-
-                //create a structure of font data with fields from the parsed font.
-                let newFontData = {
-                    familyName: font_.familyName,
-                    styleName: font_.style,
-                    glyphs: rebuiltGlyphs,
-                }
-
-                //extract as much available data out of the existing font data and copy it over to the new font:
-                let optionalFontDataFields = [
-                    "defaultWidthX",
-                    "nominalWidthX",
-                    "unitsPerEm",
-                    "ascender",
-                    "descender",
-                ]
-                optionalFontDataFields.forEach((field) => {
-                    if (fontData_[field] != null) {
-                        newFontData[field] = fontData_[field]
-                    }
-                })
-
-                //rebuild and download the font.
-                let newFont = new opentype.Font(newFontData)
-                callback_(newFont.ToNodeBuffer(), font_)
-            }
+            })
         })
     }
 }
