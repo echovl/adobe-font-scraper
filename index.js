@@ -3,22 +3,46 @@ const fs = require("fs")
 
 async function main() {
     let page = 1
-    let pageStep = 1
-    while (page == 1) {
-        const fontFamilies = await TypeRip.getFontFamily(page, page + pageStep)
+    let pageStep = 10
+    while (true) {
+        try {
+            const fontFamilies = await TypeRip.getFontFamily(
+                page,
+                page + pageStep
+            )
 
-        if (fontFamilies.length == 0) {
-            break
-        }
-
-        for (const fontFamily of fontFamilies) {
-            const ttfs = await TypeRip.downloadFonts(fontFamily.fonts, false)
-            for (const [idx, font] of fontFamily.fonts.entries()) {
-                console.log("Downloading font", font.name)
-                fs.writeFileSync(font.name + ".ttf", ttfs[idx])
+            if (fontFamilies.length == 0) {
+                break
             }
+
+            for (const [familyIndex, fontFamily] of fontFamilies.entries()) {
+                try {
+                    const ttfs = await TypeRip.downloadFonts(
+                        fontFamily.fonts,
+                        false
+                    )
+                    for (const [
+                        fontIndex,
+                        font,
+                    ] of fontFamily.fonts.entries()) {
+                        console.log(
+                            `Downloading font ${familyIndex}/${fontFamilies.length} ${font.name}`
+                        )
+                        fs.writeFileSync(
+                            "./fonts/" + font.name + ".ttf",
+                            ttfs[fontIndex]
+                        )
+                    }
+                } catch (err) {
+                    console.log(err)
+                    continue
+                }
+            }
+            page += pageStep
+        } catch (err) {
+            console.log(err)
+            continue
         }
-        page += pageStep
     }
 }
 
