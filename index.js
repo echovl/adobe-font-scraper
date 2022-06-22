@@ -21,13 +21,22 @@ async function main() {
                         fontFamily.fonts,
                         false
                     )
+
                     for (const [
                         fontIndex,
                         font,
                     ] of fontFamily.fonts.entries()) {
                         console.log(
-                            `Downloading font ${familyIndex}/${fontFamilies.length} ${font.name}`
+                            `Downloading font ${familyIndex}/${
+                                fontFamilies.length
+                            }/${page}-${page + pageStep} ${font.name}`
                         )
+
+                        if (ttfs[fontIndex].toString() == "") {
+                            console.log("Skipping ...")
+                            continue
+                        }
+
                         fs.writeFileSync(
                             "./fonts/" + font.name + ".ttf",
                             ttfs[fontIndex]
